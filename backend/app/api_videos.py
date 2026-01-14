@@ -1,9 +1,6 @@
 import os
-import pathlib
-import shutil
 import uuid
-import httpx
-
+import shutil
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 
@@ -25,31 +22,51 @@ def db_dep():
 def ensure_user(db: Session, user_id: str):
     u = db.query(User).filter(User.id == user_id).first()
     if not u:
-        u = User(id=user_id)
-        db.add(u)
+        db.add(User(id=user_id))
         db.commit()
 
-def _safe_filename(name: str) -> str:
+def safe_name(name: str) -> str:
     name = name.replace("\\", "_").replace("/", "_")
     return "".join(ch for ch in name if ch.isalnum() or ch in ("-", "_", ".", " ")).strip() or "video.mp4"
 
-def _public_upload_url(user_id: str, rel_path: str) -> str:
-    # exposed by backend at /uploads/...
-    base = settings.PUBLIC_BASE_URL.rstrip("/")
-    return f"{base}/uploads/{user_id}/{rel_path}"
+def public_upload_url(user_id: str, filename: str) -> str:
+    return f"{settings.PUBLIC_BASE_URL.rstrip('/')}/uploads/{user_id}/{filename}"
+
+def serialize(v: Video) -> dict:
+    caps_str = None
+    if isinstance(v.captions, dict):
+        caps_str = v.captions.get("srt") or v.captions.get("text")
+    return {
+        "id": v.id,
+        "user_id": v.user_id,
+        "original_filename": v.original_filename,
+        "storage_path": v.storage_path,
+        "status": v.status,
+        "transcript": v.transcript,
+        "captions": caps_str,
+        "title": v.title,
+        "description": v.description,
+        "tags": v.tags,
+        "hashtags": v.hashtags,
+        "thumbnail_url": v.thumbnail_url,
+        "privacy_status": v.privacy_status,
+        "youtube_id": v.youtube_id,
+        "youtube_url": v.youtube_url,
+        "error_message": v.error_message,
+    }
 
 @router.get("")
 def list_videos(user_id: str = Depends(require_user_id), db: Session = Depends(db_dep)):
     ensure_user(db, user_id)
-    vids = db.query(Video).filter(Video.user_id == user_id).order_by(Video.id.desc()).all()
-    return [serialize_video(v) for v in vids]
+    rows = db.query(Video).filter(Video.user_id == user_id).order_by(Video.id.desc()).all()
+    return [serialize(v) for v in rows]
 
 @router.get("/{video_id}")
 def get_video(video_id: int, user_id: str = Depends(require_user_id), db: Session = Depends(db_dep)):
     v = db.query(Video).filter(Video.id == video_id, Video.user_id == user_id).first()
     if not v:
         raise HTTPException(404, "Video not found")
-    return serialize_video(v)
+    return serialize(v)
 
 @router.patch("/{video_id}")
 def patch_video(video_id: int, payload: dict, user_id: str = Depends(require_user_id), db: Session = Depends(db_dep)):
@@ -58,9 +75,8 @@ def patch_video(video_id: int, payload: dict, user_id: str = Depends(require_use
         raise HTTPException(404, "Video not found")
 
     allowed = {
-        "status","transcript","captions","title","description","tags","hashtags",
-        "thumbnail_url","thumbnail_prompt","privacy_status","language",
-        "trim_start_ms","trim_end_ms","start_sec","end_sec","error_message"
+        "status", "transcript", "captions", "title", "description", "tags", "hashtags",
+        "thumbnail_url", "thumbnail_prompt", "privacy_status", "language", "error_message"
     }
     for k, val in payload.items():
         if k in allowed:
@@ -69,37 +85,29 @@ def patch_video(video_id: int, payload: dict, user_id: str = Depends(require_use
     db.add(v)
     db.commit()
     db.refresh(v)
-    return serialize_video(v)
+    return serialize(v)
 
 @router.post("/upload")
-async def upload_video(
+async def upload(
     file: UploadFile = File(...),
     user_id: str = Depends(require_user_id),
-    db: Session = Depends(db_dep),
+    db: Session = Depends(db_dep)
 ):
     ensure_user(db, user_id)
-
     if not file.filename:
         raise HTTPException(400, "Missing filename")
 
-    safe = _safe_filename(file.filename)
-    user_dir = os.path.join(settings.UPLOAD_DIR, user_id)
-    os.makedirs(user_dir, exist_ok=True)
+    os.makedirs(os.path.join(settings.UPLOAD_DIR, user_id), exist_ok=True)
+    fname = f"{uuid.uuid4().hex}_{safe_name(file.filename)}"
+    local_path = os.path.join(settings.UPLOAD_DIR, user_id, fname)
 
-    unique = f"{uuid.uuid4().hex}_{safe}"
-    dst_path = os.path.join(user_dir, unique)
-
-    # write stream to disk
-    with open(dst_path, "wb") as f:
+    with open(local_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    rel = unique
-    public_url = _public_upload_url(user_id, rel)
-
     v = Video(
         user_id=user_id,
-        original_filename=safe,
-        storage_path=public_url,
+        original_filename=safe_name(file.filename),
+        storage_path=public_upload_url(user_id, fname),
         status="ready",
         language="en",
         privacy_status="private",
@@ -107,24 +115,21 @@ async def upload_video(
     db.add(v)
     db.commit()
     db.refresh(v)
-    return serialize_video(v)
+    return serialize(v)
 
 @router.post("/ingest")
-def ingest_video(
-    payload: dict,
-    user_id: str = Depends(require_user_id),
-    db: Session = Depends(db_dep),
-):
+def ingest(payload: dict, user_id: str = Depends(require_user_id), db: Session = Depends(db_dep)):
     ensure_user(db, user_id)
-    video_url = (payload.get("video_url") or "").strip()
-    filename = (payload.get("filename") or "ingested.mp4").strip()
-    if not video_url:
+    url = (payload.get("video_url") or "").strip()
+    if not url:
         raise HTTPException(400, "video_url required")
+
+    filename = safe_name(payload.get("filename") or "ingested.mp4")
 
     v = Video(
         user_id=user_id,
-        original_filename=_safe_filename(filename),
-        storage_path=video_url,
+        original_filename=filename,
+        storage_path=url,
         status="ready",
         language="en",
         privacy_status="private",
@@ -133,52 +138,61 @@ def ingest_video(
     db.commit()
     db.refresh(v)
 
-    req = VideoIngestRequest(
+    db.add(VideoIngestRequest(
         user_id=user_id,
         provider="url",
-        source_path=video_url,
-        source_file_name=v.original_filename,
+        source_path=url,
+        source_file_name=filename,
         status="done",
-        video_id=v.id,
-    )
-    db.add(req)
+        video_id=v.id
+    ))
     db.commit()
 
-    return serialize_video(v)
+    return serialize(v)
 
 @router.post("/caption")
-async def caption_video(
-    payload: dict,
-    user_id: str = Depends(require_user_id),
-    db: Session = Depends(db_dep),
-):
-    video_id = payload.get("video_id")
-    language_code = payload.get("language_code") or settings.DEFAULT_LANGUAGE_CODE
-    if not video_id:
+async def caption(payload: dict, user_id: str = Depends(require_user_id), db: Session = Depends(db_dep)):
+    """
+    Calls n8n:
+      POST N8N_TRANSCRIBE_URL
+      Content-Type: application/x-www-form-urlencoded
+      params: video_url, language_code
+    Response: { "text": "...", "srt": "..." }
+    """
+    ensure_user(db, user_id)
+
+    vid = payload.get("video_id")
+    if not vid:
         raise HTTPException(400, "video_id required")
 
-    v = db.query(Video).filter(Video.id == int(video_id), Video.user_id == user_id).first()
+    language_code = payload.get("language_code") or settings.DEFAULT_LANGUAGE_CODE
+
+    v = db.query(Video).filter(Video.id == int(vid), Video.user_id == user_id).first()
     if not v:
         raise HTTPException(404, "Video not found")
+
+    # n8n needs a public URL
+    video_url = v.storage_path
+    if not video_url:
+        raise HTTPException(400, "Video storage_path is empty")
 
     v.status = "captioning"
     db.add(v)
     db.commit()
 
-    # n8n expects public URL
-    video_url = v.storage_path
     try:
         res = await transcribe_via_n8n(video_url=video_url, language_code=language_code)
     except Exception as e:
         v.status = "error"
-        v.error_message = f"Caption webhook failed: {e}"
-        db.add(v); db.commit()
+        v.error_message = f"Transcribe failed: {e}"
+        db.add(v)
+        db.commit()
         raise HTTPException(502, v.error_message)
 
-    text = res.get("text")
     srt = res.get("srt")
+    text = res.get("text")
 
-    # Prefer srt if available; store in captions jsonb for compatibility
+    # Store in DB (JSONB)
     if srt:
         v.captions = {"format": "srt", "srt": srt}
     elif text:
@@ -187,39 +201,24 @@ async def caption_video(
         v.captions = None
 
     v.transcript = text or v.transcript
-    v.status = "metadata_ready" if v.captions else "ready"
+    v.status = "metadata_ready"
     db.add(v)
     db.commit()
     db.refresh(v)
+
+    # Optional: write an .srt file so you can see it on disk
+    if srt:
+        try:
+            out_dir = os.path.join(settings.UPLOAD_DIR, user_id)
+            os.makedirs(out_dir, exist_ok=True)
+            srt_path = os.path.join(out_dir, f"video_{v.id}.srt")
+            with open(srt_path, "w", encoding="utf-8") as f:
+                f.write(srt)
+        except Exception:
+            pass
 
     return {
         "captions_format": "srt" if srt else "text",
         "captions": srt if srt else (text or "")
     }
 
-def serialize_video(v: Video) -> dict:
-    # Normalize captions: if stored as jsonb, still return a convenient string field as well
-    captions_str = None
-    if isinstance(v.captions, dict):
-        captions_str = v.captions.get("srt") or v.captions.get("text")
-    return {
-        "id": v.id,
-        "user_id": v.user_id,
-        "original_filename": v.original_filename,
-        "storage_path": v.storage_path,
-        "status": v.status,
-        "transcript": v.transcript,
-        "captions": captions_str,
-        "title": v.title,
-        "description": v.description,
-        "tags": v.tags,
-        "hashtags": v.hashtags,
-        "thumbnail_url": v.thumbnail_url,
-        "language": v.language,
-        "privacy_status": v.privacy_status,
-        "youtube_id": v.youtube_id,
-        "youtube_url": v.youtube_url,
-        "error_message": v.error_message,
-        "created_at": getattr(v, "created_at", None),
-        "updated_at": getattr(v, "updated_at", None),
-    }
