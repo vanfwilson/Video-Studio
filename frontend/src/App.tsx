@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import UploadPage from "./pages/UploadPage";
 import VideoEditor from "./pages/VideoEditor";
 import YouTubeCallback from "./pages/YouTubeCallback";
+import SettingsPage from "./pages/SettingsPage";
 
 function App() {
   return (
@@ -18,8 +19,9 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/video/:id" element={<VideoEditor />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="/oauth/youtube/callback" element={<YouTubeCallback />} />
-            
+
             {/* Catch-all redirect to dashboard */}
             <Route path="*" element={<Dashboard />} />
           </Routes>

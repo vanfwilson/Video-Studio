@@ -315,10 +315,11 @@ async def request_captions(
     db.add(transaction)
     db.commit()
     
-    # Call n8n
+    # Call n8n with video_id for callback
     try:
         result = await transcribe_via_n8n(
             video_url=video.storage_path,
+            video_id=video.id,
             language_code=language_code
         )
     except Exception as e:
@@ -330,24 +331,35 @@ async def request_captions(
         db.commit()
         raise HTTPException(502, video.error_message)
     
-    # Process result
+    # Check if n8n is processing async (will callback later)
+    if result.get("async"):
+        # n8n is processing async - will call /webhook/caption-result when done
+        transaction.response_payload = result
+        db.commit()
+        return {
+            "status": "processing",
+            "message": "Transcription started. Results will update automatically.",
+            "video_id": video.id
+        }
+
+    # Process synchronous result (n8n returned immediately)
     srt = result.get("srt")
     text = result.get("text")
-    
+
     if srt:
         video.captions = {"format": "srt", "srt": srt}
     elif text:
         video.captions = {"format": "text", "text": text}
-    
+
     video.transcript = text or video.transcript
     video.status = "metadata_ready"
-    
+
     transaction.status = "success"
     transaction.response_payload = result
     transaction.completed_at = datetime.utcnow()
-    
+
     db.commit()
-    
+
     # Write SRT file to disk
     if srt:
         try:
@@ -358,7 +370,7 @@ async def request_captions(
                 f.write(srt)
         except Exception:
             pass
-    
+
     return {
         "captions_format": "srt" if srt else "text",
         "captions": srt if srt else (text or "")

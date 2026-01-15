@@ -15,6 +15,7 @@ from app.config import settings
 from app.db import init_engine
 from app.api_videos import router as video_router
 from app.api_youtube import router as youtube_router
+from app.api_webhooks import router as webhook_router
 
 # Create FastAPI app
 app = FastAPI(
@@ -50,6 +51,7 @@ app.add_middleware(
 # Include API routers
 app.include_router(video_router)
 app.include_router(youtube_router)
+app.include_router(webhook_router)
 
 
 @app.get("/health")

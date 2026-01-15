@@ -12,6 +12,7 @@ export function Layout({ children }: LayoutProps) {
   const navItems = [
     { path: "/", label: "Dashboard", icon: LayoutDashboard },
     { path: "/upload", label: "Upload", icon: Upload },
+    { path: "/settings", label: "Settings", icon: Settings },
   ];
 
   return (
