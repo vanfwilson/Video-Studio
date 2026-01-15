@@ -1,0 +1,75 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: video_studio
+      POSTGRES_USER: video_studio
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - video_studio_pg:/var/lib/postgresql/data
+    networks:
+      - video-studio-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U video_studio -d video_studio"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  video-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://video_studio:${POSTGRES_PASSWORD}@postgres:5432/video_studio
+
+      PUBLIC_BASE_URL: https://video-studio.askstephen.ai
+      UPLOAD_DIR: /data/uploads
+
+      CORS_ORIGINS: https://askstephen.ai,https://video-studio.askstephen.ai
+
+      # n8n
+      N8N_TRANSCRIBE_URL: https://automation.aiautomationauthority.com/transcribe
+      N8N_PUBLISH_URL: ${N8N_PUBLISH_URL}
+      DEFAULT_LANGUAGE_CODE: en
+
+      # OpenRouter (optional)
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL}
+      OPENROUTER_SITE_URL: https://askstephen.ai
+      OPENROUTER_APP_NAME: Video Studio
+
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+    volumes:
+      - video_studio_uploads:/data/uploads
+    networks:
+      - traefik-public
+      - video-studio-internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+
+      - "traefik.http.routers.video-studio.rule=Host(`video-studio.askstephen.ai`)"
+      - "traefik.http.routers.video-studio.entrypoints=websecure"
+      - "traefik.http.routers.video-studio.tls=true"
+      - "traefik.http.routers.video-studio.tls.certresolver=cloudflare"
+
+      - "traefik.http.services.video-studio.loadbalancer.server.port=8080"
+
+networks:
+  traefik-public:
+    external: true
+  video-studio-internal:
+    driver: bridge
+
+volumes:
+  video_studio_pg:
+  video_studio_uploads:
