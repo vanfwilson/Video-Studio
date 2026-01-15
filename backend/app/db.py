@@ -1,19 +1,22 @@
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 
-class Base(DeclarativeBase):
-    pass
-
-engine = create_engine(
-    # DATABASE_URL should be like: postgresql+psycopg2://user:pass@host:5432/dbname
-    url=None,  # set in init_engine()
-    pool_pre_ping=True,
-)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False)
+Base = declarative_base()
+SessionLocal = None
+engine = None
 
 def init_engine(database_url: str):
-    global engine
-    engine = create_engine(database_url, pool_pre_ping=True)
-    SessionLocal.configure(bind=engine)
+    global engine, SessionLocal
+    engine = create_engine(database_url, pool_pre_ping=True, pool_size=10, max_overflow=20)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     return engine
+
+def get_db():
+    if SessionLocal is None:
+        raise RuntimeError("Database not initialized. Call init_engine first.")
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

@@ -1,151 +1,171 @@
-import datetime
 import secrets
+from datetime import datetime, timedelta
 from typing import Optional
 from sqlalchemy.orm import Session
-
-from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 
 from app.config import settings
-from app.crypto import encrypt_text, decrypt_text
-from app.models import OAuthState, UserSocialAccount
+from app.models import UserSocialAccount, OAuthState
 
-def _client_config():
+# YouTube OAuth scopes
+SCOPES = settings.YOUTUBE_SCOPES.split()
+
+
+def create_oauth_flow() -> Flow:
+    """Create Google OAuth flow for YouTube."""
     if not settings.YOUTUBE_CLIENT_ID or not settings.YOUTUBE_CLIENT_SECRET:
-        raise RuntimeError("Missing YOUTUBE_CLIENT_ID / YOUTUBE_CLIENT_SECRET")
-    return {
+        raise RuntimeError("YouTube OAuth credentials not configured")
+    
+    client_config = {
         "web": {
             "client_id": settings.YOUTUBE_CLIENT_ID,
             "client_secret": settings.YOUTUBE_CLIENT_SECRET,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [settings.YOUTUBE_REDIRECT_URI],
+            "redirect_uris": [settings.YOUTUBE_REDIRECT_URI]
         }
     }
-
-def youtube_flow():
-    if not settings.YOUTUBE_REDIRECT_URI:
-        raise RuntimeError("Missing YOUTUBE_REDIRECT_URI")
-    scopes = settings.YOUTUBE_SCOPES.split()
-    flow = Flow.from_client_config(_client_config(), scopes=scopes)
-    flow.redirect_uri = settings.YOUTUBE_REDIRECT_URI
+    
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=SCOPES,
+        redirect_uri=settings.YOUTUBE_REDIRECT_URI
+    )
     return flow
 
-def create_auth_url(db: Session, user_id: str) -> str:
-    flow = youtube_flow()
+
+def generate_auth_url(db: Session, user_id: str) -> str:
+    """
+    Generate YouTube OAuth authorization URL.
+    Stores state for CSRF protection.
+    """
+    flow = create_oauth_flow()
     state = secrets.token_urlsafe(32)
-
-    db.add(OAuthState(provider="youtube", user_id=user_id, state=state))
+    
+    # Store state for verification
+    db.query(OAuthState).filter(
+        OAuthState.user_id == user_id,
+        OAuthState.provider == "youtube"
+    ).delete()
+    
+    db.add(OAuthState(
+        provider="youtube",
+        user_id=user_id,
+        state=state
+    ))
     db.commit()
-
+    
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
-        prompt="consent",
-        state=state
+        state=state,
+        prompt="consent"
     )
     return auth_url
 
-def exchange_code(db: Session, user_id: str, code: str, state: str) -> None:
-    st = db.query(OAuthState).filter(OAuthState.provider == "youtube", OAuthState.state == state).first()
-    if not st or st.user_id != user_id:
-        raise ValueError("Invalid OAuth state")
-    # consume state
-    db.delete(st)
-    db.commit()
 
-    flow = youtube_flow()
+def exchange_code_for_tokens(db: Session, user_id: str, code: str, state: str) -> dict:
+    """
+    Exchange authorization code for tokens and store them.
+    """
+    # Verify state
+    stored_state = db.query(OAuthState).filter(
+        OAuthState.user_id == user_id,
+        OAuthState.provider == "youtube",
+        OAuthState.state == state
+    ).first()
+    
+    if not stored_state:
+        raise ValueError("Invalid or expired OAuth state")
+    
+    # Clean up state
+    db.delete(stored_state)
+    db.commit()
+    
+    # Exchange code for tokens
+    flow = create_oauth_flow()
     flow.fetch_token(code=code)
-
-    creds = flow.credentials
-    _store_youtube_credentials(db, user_id=user_id, creds=creds)
-
-def _store_youtube_credentials(db: Session, user_id: str, creds: Credentials) -> None:
-    # grab channel info
-    yt = build("youtube", "v3", credentials=creds)
-    channels = yt.channels().list(part="snippet", mine=True).execute()
-    item = (channels.get("items") or [None])[0]
-    channel_id = item.get("id") if item else None
-    channel_name = item.get("snippet", {}).get("title") if item else None
-    thumb = item.get("snippet", {}).get("thumbnails", {}).get("default", {}).get("url") if item else None
-
-    expires_at = None
-    if creds.expiry:
-        expires_at = creds.expiry.replace(tzinfo=None)
-
-    row = (
-        db.query(UserSocialAccount)
-        .filter(UserSocialAccount.user_id == user_id, UserSocialAccount.platform == "youtube")
-        .first()
-    )
-    if not row:
-        row = UserSocialAccount(user_id=user_id, platform="youtube")
-
-    row.channel_id = channel_id
-    row.account_name = channel_name
-    row.profile_image_url = thumb
-
-    row.access_token = encrypt_text(creds.token)
-    row.refresh_token = encrypt_text(creds.refresh_token)
-    row.token_expires_at = expires_at
-    row.is_active = True
-
-    db.add(row)
+    credentials = flow.credentials
+    
+    # Get YouTube channel info
+    youtube = build("youtube", "v3", credentials=credentials)
+    channels = youtube.channels().list(part="snippet", mine=True).execute()
+    
+    channel_info = {}
+    if channels.get("items"):
+        ch = channels["items"][0]
+        channel_info = {
+            "channel_id": ch["id"],
+            "account_name": ch["snippet"]["title"],
+            "profile_image_url": ch["snippet"]["thumbnails"]["default"]["url"]
+        }
+    
+    # Store or update social account
+    existing = db.query(UserSocialAccount).filter(
+        UserSocialAccount.user_id == user_id,
+        UserSocialAccount.platform == "youtube"
+    ).first()
+    
+    if existing:
+        existing.access_token = credentials.token
+        existing.refresh_token = credentials.refresh_token
+        existing.token_expires_at = credentials.expiry
+        existing.channel_id = channel_info.get("channel_id")
+        existing.account_name = channel_info.get("account_name")
+        existing.profile_image_url = channel_info.get("profile_image_url")
+        existing.is_active = True
+    else:
+        existing = UserSocialAccount(
+            user_id=user_id,
+            platform="youtube",
+            access_token=credentials.token,
+            refresh_token=credentials.refresh_token,
+            token_expires_at=credentials.expiry,
+            channel_id=channel_info.get("channel_id"),
+            account_name=channel_info.get("account_name"),
+            profile_image_url=channel_info.get("profile_image_url"),
+            is_active=True
+        )
+        db.add(existing)
+    
     db.commit()
+    
+    return {
+        "ok": True,
+        "channel_id": channel_info.get("channel_id"),
+        "account_name": channel_info.get("account_name")
+    }
 
-def _load_creds_from_db(row: UserSocialAccount) -> Credentials:
-    scopes = settings.YOUTUBE_SCOPES.split()
-    return Credentials(
-        token=decrypt_text(row.access_token),
-        refresh_token=decrypt_text(row.refresh_token),
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=settings.YOUTUBE_CLIENT_ID,
-        client_secret=settings.YOUTUBE_CLIENT_SECRET,
-        scopes=scopes,
-    )
 
-def youtube_connected(db: Session, user_id: str) -> tuple[bool, Optional[UserSocialAccount]]:
-    row = db.query(UserSocialAccount).filter(
+def get_youtube_account(db: Session, user_id: str) -> Optional[UserSocialAccount]:
+    """Get the user's YouTube social account."""
+    return db.query(UserSocialAccount).filter(
         UserSocialAccount.user_id == user_id,
         UserSocialAccount.platform == "youtube",
         UserSocialAccount.is_active == True
     ).first()
-    return (row is not None, row)
 
-def upload_video_to_youtube(
-    db: Session,
-    user_id: str,
-    file_path: str,
-    title: str,
-    description: str,
-    tags: list[str] | None = None,
-    privacy_status: str = "private",
-) -> dict:
-    ok, row = youtube_connected(db, user_id)
-    if not ok or not row:
-        raise RuntimeError("YouTube not connected")
 
-    creds = _load_creds_from_db(row)
-    yt = build("youtube", "v3", credentials=creds)
+def get_credentials(account: UserSocialAccount) -> Optional[Credentials]:
+    """Get Google credentials from stored social account."""
+    if not account or not account.access_token:
+        return None
+    
+    credentials = Credentials(
+        token=account.access_token,
+        refresh_token=account.refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=settings.YOUTUBE_CLIENT_ID,
+        client_secret=settings.YOUTUBE_CLIENT_SECRET,
+        expiry=account.token_expires_at
+    )
+    return credentials
 
-    body = {
-        "snippet": {
-            "title": title,
-            "description": description,
-            "tags": tags or [],
-            "categoryId": "22",  # People & Blogs (safe default)
-        },
-        "status": {
-            "privacyStatus": privacy_status
-        }
-    }
 
-    media = MediaFileUpload(file_path, chunksize=-1, resumable=True)
-
-    req = yt.videos().insert(part="snippet,status", body=body, media_body=media)
-    resp = req.execute()
-    video_id = resp.get("id")
-    url = f"https://www.youtube.com/watch?v={video_id}" if video_id else None
-    return {"youtube_id": video_id, "youtube_url": url}
+def is_token_valid(account: UserSocialAccount) -> bool:
+    """Check if the stored token is still valid."""
+    if not account or not account.token_expires_at:
+        return False
+    return account.token_expires_at > datetime.utcnow() + timedelta(minutes=5)

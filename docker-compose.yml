@@ -1,0 +1,121 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  video-studio-db:
+    image: postgres:16-alpine
+    container_name: video-studio-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: video_studio
+      POSTGRES_USER: video_studio
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-video_studio_secure_password}
+    volumes:
+      - video_studio_db_data:/var/lib/postgresql/data
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - video-studio-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U video_studio -d video_studio"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  video-studio-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: video-studio-api
+    restart: unless-stopped
+    environment:
+      # Database
+      DATABASE_URL: postgresql://video_studio:${POSTGRES_PASSWORD:-video_studio_secure_password}@video-studio-db:5432/video_studio
+      
+      # Public URL (used for n8n video URLs)
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://video-studio.askstephen.ai}
+      
+      # n8n Webhooks
+      N8N_TRANSCRIBE_URL: ${N8N_TRANSCRIBE_URL:-https://automation.aiautomationauthority.com/webhook/transcribe}
+      N8N_PUBLISH_URL: ${N8N_PUBLISH_URL:-https://automation.aiautomationauthority.com/webhook/publish}
+      DEFAULT_LANGUAGE_CODE: ${DEFAULT_LANGUAGE_CODE:-en}
+      
+      # OpenRouter AI (for metadata generation & confidentiality check)
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      OPENROUTER_SITE_URL: ${OPENROUTER_SITE_URL:-https://video-studio.askstephen.ai}
+      OPENROUTER_APP_NAME: ${OPENROUTER_APP_NAME:-Video Studio}
+      
+      # YouTube OAuth
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
+      YOUTUBE_REDIRECT_URI: ${YOUTUBE_REDIRECT_URI:-https://video-studio.askstephen.ai/oauth/youtube/callback}
+      
+      # Storage
+      UPLOAD_DIR: /data/uploads
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-2000}
+      
+      # CORS
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      
+      # Security
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+    volumes:
+      - video_studio_uploads:/data/uploads
+    depends_on:
+      video-studio-db:
+        condition: service_healthy
+    networks:
+      - video-studio-internal
+      - traefik-network
+    labels:
+      - "traefik.enable=true"
+      # API routes
+      - "traefik.http.routers.video-studio-api.rule=Host(`video-studio.askstephen.ai`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.video-studio-api.entrypoints=websecure"
+      - "traefik.http.routers.video-studio-api.tls.certresolver=cloudflare"
+      - "traefik.http.services.video-studio-api.loadbalancer.server.port=8080"
+      - "traefik.http.middlewares.api-strip.stripprefix.prefixes=/api"
+      - "traefik.http.routers.video-studio-api.middlewares=api-strip"
+      # Uploads route (no strip)
+      - "traefik.http.routers.video-studio-uploads.rule=Host(`video-studio.askstephen.ai`) && PathPrefix(`/uploads`)"
+      - "traefik.http.routers.video-studio-uploads.entrypoints=websecure"
+      - "traefik.http.routers.video-studio-uploads.tls.certresolver=cloudflare"
+      - "traefik.http.routers.video-studio-uploads.service=video-studio-api"
+      # OAuth callback route
+      - "traefik.http.routers.video-studio-oauth.rule=Host(`video-studio.askstephen.ai`) && PathPrefix(`/oauth`)"
+      - "traefik.http.routers.video-studio-oauth.entrypoints=websecure"
+      - "traefik.http.routers.video-studio-oauth.tls.certresolver=cloudflare"
+      - "traefik.http.routers.video-studio-oauth.service=video-studio-api"
+
+  # React Frontend
+  video-studio-web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${PUBLIC_BASE_URL:-https://video-studio.askstephen.ai}/api
+    container_name: video-studio-web
+    restart: unless-stopped
+    depends_on:
+      - video-studio-api
+    networks:
+      - video-studio-internal
+      - traefik-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.video-studio-web.rule=Host(`video-studio.askstephen.ai`)"
+      - "traefik.http.routers.video-studio-web.entrypoints=websecure"
+      - "traefik.http.routers.video-studio-web.tls.certresolver=cloudflare"
+      - "traefik.http.services.video-studio-web.loadbalancer.server.port=80"
+      - "traefik.http.routers.video-studio-web.priority=1"
+
+networks:
+  video-studio-internal:
+    driver: bridge
+  traefik-network:
+    external: true
+
+volumes:
+  video_studio_db_data:
+  video_studio_uploads:

@@ -3,9 +3,18 @@ from app.config import settings
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-async def chat_json(system: str, user: str) -> dict:
+async def chat_completion(system: str, user: str, temperature: float = 0.4) -> dict:
+    """
+    Make a chat completion request to OpenRouter.
+
+    Returns:
+    {
+        "raw": "Model response text",
+        "model": "model name used"
+    }
+    """
     if not settings.OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY not set")
+        raise RuntimeError("OPENROUTER_API_KEY not configured")
 
     headers = {
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
@@ -20,13 +29,13 @@ async def chat_json(system: str, user: str) -> dict:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "temperature": 0.4,
+        "temperature": temperature,
     }
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        r = await client.post(OPENROUTER_URL, headers=headers, json=payload)
-        r.raise_for_status()
-        data = r.json()
+        response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
 
     content = data["choices"][0]["message"]["content"]
     return {"raw": content, "model": settings.OPENROUTER_MODEL}
