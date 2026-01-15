@@ -1,0 +1,66 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: askstephen
+      POSTGRES_USER: askstephen
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - askstephen
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U askstephen -d askstephen"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  video-studio-api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://askstephen:${POSTGRES_PASSWORD}@postgres:5432/askstephen
+      PUBLIC_BASE_URL: ${VIDEO_STUDIO_PUBLIC_BASE_URL}
+      N8N_TRANSCRIBE_URL: http://72.60.225.136:8001/transcribe
+      CORS_ORIGINS: ${CORS_ORIGINS}
+
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
+      YOUTUBE_REDIRECT_URI: ${YOUTUBE_REDIRECT_URI}
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - askstephen
+
+  video-studio-web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VIDEO_STUDIO_API_BASE_URL}
+    networks:
+      - askstephen
+
+  gateway:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - video-studio-api
+      - video-studio-web
+    ports:
+      - "8088:80"
+    networks:
+      - askstephen
+
+networks:
+  askstephen:
+
+volumes:
+  pg_data:
+  uploads:
