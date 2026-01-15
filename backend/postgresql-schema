@@ -1,0 +1,627 @@
+/* ============================================================================
+  askstephen-tools (cleaned master PostgreSQL schema)
+  - Modular schemas for shared “central CRM” database
+  - Consistent UUID primary keys, timestamptz timestamps
+  - JSONB for flexible AI outputs + research payloads
+  - Ready for WordPress auth integration via external_user_id
+
+  Requires: PostgreSQL 13+ (recommended 15/16)
+============================================================================ */
+
+-- Extensions
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";  -- gen_random_uuid()
+CREATE EXTENSION IF NOT EXISTS "citext";   -- case-insensitive email
+
+/* ----------------------------------------------------------------------------
+  Utility: updated_at trigger
+---------------------------------------------------------------------------- */
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+/* ----------------------------------------------------------------------------
+  Schemas (module boundaries)
+---------------------------------------------------------------------------- */
+CREATE SCHEMA IF NOT EXISTS auth;
+CREATE SCHEMA IF NOT EXISTS video;
+CREATE SCHEMA IF NOT EXISTS research;
+CREATE SCHEMA IF NOT EXISTS workbook;
+CREATE SCHEMA IF NOT EXISTS chat;
+CREATE SCHEMA IF NOT EXISTS docs;
+
+/* ============================================================================
+  AUTH (Users, identities, roles)
+============================================================================ */
+CREATE TABLE IF NOT EXISTS auth.users (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  external_user_id   text UNIQUE,            -- e.g., WP user id, Clerk id, etc.
+  email              citext UNIQUE,
+  first_name         text,
+  last_name          text,
+  profile_image_url  text,
+  role               text NOT NULL DEFAULT 'user',  -- 'admin'|'user'|'search' etc
+  notes              text,
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  updated_at         timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_auth_users_updated
+BEFORE UPDATE ON auth.users
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- Optional: multiple identities per user (wp/clerk/google/etc)
+CREATE TABLE IF NOT EXISTS auth.user_identities (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  provider      text NOT NULL,                 -- 'wordpress'|'clerk'|'google'|'github'...
+  provider_sub  text NOT NULL,                 -- subject/identifier from provider
+  metadata      jsonb,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(provider, provider_sub)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_identities_user ON auth.user_identities(user_id);
+
+/* ============================================================================
+  VIDEO STUDIO (uploads, captions, metadata, publish, platforms, connections)
+============================================================================ */
+
+-- Cloud storage connections (Dropbox/GDrive/OneDrive)
+CREATE TABLE IF NOT EXISTS video.cloud_connections (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id             uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  provider            text NOT NULL,           -- 'dropbox'|'gdrive'|'onedrive'|'filemanager'
+  account_id          text,
+  account_name        text,
+  account_email       citext,
+  profile_photo_url   text,
+  selected_folder_path text,
+  selected_folder_name text,
+  is_active           boolean NOT NULL DEFAULT true,
+  last_synced_at      timestamptz,
+  -- store token refs or encrypted tokens; prefer encryption or external secret store
+  secrets             jsonb,                   -- {access_token, refresh_token, expires_at} (encrypted upstream if possible)
+  metadata            jsonb,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_cloud_connections_updated
+BEFORE UPDATE ON video.cloud_connections
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_cloud_connections_user ON video.cloud_connections(user_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_connections_provider ON video.cloud_connections(provider);
+
+-- Social platform connections (YouTube now; TikTok/IG later)
+CREATE TABLE IF NOT EXISTS video.user_social_accounts (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  platform          text NOT NULL,      -- 'youtube'|'tiktok'|'instagram'|'linkedin'...
+  account_id        text,
+  account_name      text,
+  account_email     citext,
+  channel_id        text,               -- youtube channel id
+  profile_image_url text,
+  is_active         boolean NOT NULL DEFAULT true,
+  secrets           jsonb,              -- encrypted tokens or references
+  metadata          jsonb,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(user_id, platform, COALESCE(account_id,''), COALESCE(channel_id,''))
+);
+
+CREATE TRIGGER trg_user_social_accounts_updated
+BEFORE UPDATE ON video.user_social_accounts
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_social_accounts_user ON video.user_social_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_social_accounts_platform ON video.user_social_accounts(platform);
+
+-- Video assets (raw uploads or externally hosted URLs)
+CREATE TABLE IF NOT EXISTS video.videos (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id            uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+
+  original_filename  text NOT NULL,
+  storage_path       text NOT NULL,          -- public URL or internal path
+  source_provider    text,                   -- 'upload'|'dropbox'|'gdrive'|'onedrive'|'url'
+  status             text NOT NULL DEFAULT 'ready', -- 'uploading'|'ready'|'captioning'|'editing'|'published'|'error'
+
+  duration_ms        integer,
+  language           text NOT NULL DEFAULT 'en',
+
+  -- Transcript & captions
+  transcript         text,
+  captions           jsonb,                  -- {format:'srt'|'vtt'|'text', srt:'...', text:'...'}
+  captions_updated_at timestamptz,
+
+  -- AI/editor metadata
+  ai_summary         text,
+  title              text,
+  description        text,
+  tags               text,
+  hashtags           text,
+  thumbnail_prompt   text,
+  thumbnail_url      text,
+
+  -- editing
+  suggested_start_ms integer,
+  trim_start_ms      integer,
+  trim_end_ms        integer,
+  parent_video_id    uuid REFERENCES video.videos(id) ON DELETE SET NULL,
+  start_sec          integer,
+  end_sec            integer,
+
+  -- confidentiality
+  confidentiality_status text NOT NULL DEFAULT 'pending', -- 'pending'|'pass'|'warn'|'fail'
+  last_confidentiality_check_id uuid,
+
+  -- publishing fields (current best-known)
+  published_platform text,                 -- 'youtube'
+  published_id       text,                 -- platform video id
+  published_url      text,                 -- platform URL
+
+  error_message      text,
+
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  updated_at         timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_videos_updated
+BEFORE UPDATE ON video.videos
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_videos_user ON video.videos(user_id);
+CREATE INDEX IF NOT EXISTS idx_videos_status ON video.videos(status);
+CREATE INDEX IF NOT EXISTS idx_videos_created ON video.videos(created_at);
+
+-- Ingest requests (queue/history for pulling files from providers)
+CREATE TABLE IF NOT EXISTS video.video_ingest_requests (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id          uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  provider         text NOT NULL,         -- 'dropbox'|'gdrive'|'onedrive'|'url'|'upload'
+  source_path      text NOT NULL,
+  source_file_name text NOT NULL,
+  source_file_size bigint,
+
+  status           text NOT NULL DEFAULT 'queued', -- queued|downloading|processing|done|error
+  progress         jsonb,
+  error_message    text,
+
+  video_id         uuid REFERENCES video.videos(id) ON DELETE SET NULL,
+  downloaded_path  text,
+
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now(),
+  started_at       timestamptz,
+  completed_at     timestamptz
+);
+
+CREATE TRIGGER trg_ingest_updated
+BEFORE UPDATE ON video.video_ingest_requests
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_ingest_user ON video.video_ingest_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_ingest_status ON video.video_ingest_requests(status);
+
+-- Confidentiality checks (store findings)
+CREATE TABLE IF NOT EXISTS video.confidentiality_checks (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  video_id       uuid NOT NULL REFERENCES video.videos(id) ON DELETE CASCADE,
+  triggered_by   uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+
+  status         text NOT NULL DEFAULT 'pending', -- pending|done|error
+  overall_status text,                            -- pass|warn|fail
+  segments       jsonb,
+  summary        text,
+  high_count     integer NOT NULL DEFAULT 0,
+  medium_count   integer NOT NULL DEFAULT 0,
+  low_count      integer NOT NULL DEFAULT 0,
+  model_used     text,
+  error_message  text,
+
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  completed_at   timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_conf_checks_video ON video.confidentiality_checks(video_id);
+
+-- Publish events (history per attempt/platform)
+CREATE TABLE IF NOT EXISTS video.video_publish_events (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  video_id        uuid NOT NULL REFERENCES video.videos(id) ON DELETE CASCADE,
+
+  platform        text NOT NULL,            -- 'youtube' etc
+  social_account_id uuid REFERENCES video.user_social_accounts(id) ON DELETE SET NULL,
+
+  status          text NOT NULL DEFAULT 'pending', -- pending|success|failed
+  request_payload jsonb,
+  response_payload jsonb,
+  platform_video_id text,
+  platform_url    text,
+  privacy_status  text DEFAULT 'private',
+  scheduled_for   timestamptz,
+  published_at    timestamptz,
+  error_message   text,
+
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_publish_events_updated
+BEFORE UPDATE ON video.video_publish_events
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_publish_user ON video.video_publish_events(user_id);
+CREATE INDEX IF NOT EXISTS idx_publish_video ON video.video_publish_events(video_id);
+CREATE INDEX IF NOT EXISTS idx_publish_platform ON video.video_publish_events(platform);
+
+-- Optional: transcript/search queries used in “google-like search”
+CREATE TABLE IF NOT EXISTS video.search_queries (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  query       text NOT NULL,
+  results     jsonb,
+  total_found integer NOT NULL DEFAULT 0,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_search_user ON video.search_queries(user_id);
+
+/* ============================================================================
+  BUSINESS / LOCAL RESEARCH (maps, serp, promos, contacts, swot inputs)
+============================================================================ */
+
+-- A “research run” groups a scrape/session and its parameters
+CREATE TABLE IF NOT EXISTS research.research_runs (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  run_type     text NOT NULL,               -- 'maps'|'places'|'serp'|'promo_monitor'
+  query        text,
+  location     text,
+  params       jsonb,
+  status       text NOT NULL DEFAULT 'running', -- running|done|error
+  error_message text,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_research_runs_updated
+BEFORE UPDATE ON research.research_runs
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_research_runs_user ON research.research_runs(user_id);
+CREATE INDEX IF NOT EXISTS idx_research_runs_type ON research.research_runs(run_type);
+
+-- Canonical business entity (can represent competitor/partner/lead)
+CREATE TABLE IF NOT EXISTS research.businesses (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE, -- “owner” of this record set
+  label           text,                    -- user label
+  kind            text NOT NULL DEFAULT 'unknown', -- competitor|partner|lead|self|unknown
+
+  name            text NOT NULL,
+  website         text,
+  phone           text,
+  email           citext,
+
+  address_line1   text,
+  address_line2   text,
+  city            text,
+  region          text,
+  postal_code     text,
+  country         text,
+
+  lat             double precision,
+  lng             double precision,
+
+  google_place_id text,
+  maps_url        text,
+
+  categories      text,                    -- simple CSV; or normalize later
+  rating          numeric,
+  review_count    integer,
+
+  metadata        jsonb,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_businesses_updated
+BEFORE UPDATE ON research.businesses
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_businesses_user ON research.businesses(user_id);
+CREATE INDEX IF NOT EXISTS idx_businesses_kind ON research.businesses(kind);
+CREATE INDEX IF NOT EXISTS idx_businesses_placeid ON research.businesses(google_place_id);
+
+-- Contacts discovered per business (phone/email, verification status)
+CREATE TABLE IF NOT EXISTS research.business_contacts (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id  uuid NOT NULL REFERENCES research.businesses(id) ON DELETE CASCADE,
+  contact_type text NOT NULL,  -- phone|email|social|form|other
+  value        text NOT NULL,
+  is_verified  boolean NOT NULL DEFAULT false,
+  verified_at  timestamptz,
+  source       text,           -- 'serpapi'|'places'|'manual'|'hunter' etc
+  metadata     jsonb,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(business_id, contact_type, value)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_business ON research.business_contacts(business_id);
+
+-- SERP queries and results (store raw + parsed)
+CREATE TABLE IF NOT EXISTS research.serp_queries (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id      uuid REFERENCES research.research_runs(id) ON DELETE SET NULL,
+  user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  query       text NOT NULL,
+  engine      text,           -- google/bing/etc
+  params      jsonb,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_serp_queries_user ON research.serp_queries(user_id);
+
+CREATE TABLE IF NOT EXISTS research.serp_results (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  serp_query_id uuid NOT NULL REFERENCES research.serp_queries(id) ON DELETE CASCADE,
+  rank          integer,
+  title         text,
+  url           text,
+  snippet       text,
+  domain        text,
+  raw           jsonb,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_serp_results_query ON research.serp_results(serp_query_id);
+CREATE INDEX IF NOT EXISTS idx_serp_results_domain ON research.serp_results(domain);
+
+-- Promotions/posts/coupons/hiring ads monitored over time
+CREATE TABLE IF NOT EXISTS research.business_campaigns (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id  uuid NOT NULL REFERENCES research.businesses(id) ON DELETE CASCADE,
+  campaign_type text NOT NULL,           -- promo|post|sale|coupon|hiring|event
+  title        text,
+  content      text,
+  url          text,
+  start_at     timestamptz,
+  end_at       timestamptz,
+  detected_at  timestamptz NOT NULL DEFAULT now(),
+  source       text,                     -- 'gmb'|'website'|'social'|'manual'
+  raw          jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_campaigns_business ON research.business_campaigns(business_id);
+CREATE INDEX IF NOT EXISTS idx_campaigns_type ON research.business_campaigns(campaign_type);
+
+-- Derived SWOT per business or per user “overall”
+CREATE TABLE IF NOT EXISTS research.swot_analyses (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  business_id    uuid REFERENCES research.businesses(id) ON DELETE SET NULL,
+  scope          text NOT NULL DEFAULT 'overall',  -- overall|business|segment
+  strengths      jsonb,
+  weaknesses     jsonb,
+  opportunities  jsonb,
+  threats        jsonb,
+  key_insight    text,
+  key_metric     text,
+  ai_patterns    text[],
+  status         text NOT NULL DEFAULT 'draft',
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_swot_updated
+BEFORE UPDATE ON research.swot_analyses
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_swot_user ON research.swot_analyses(user_id);
+CREATE INDEX IF NOT EXISTS idx_swot_business ON research.swot_analyses(business_id);
+
+/* ============================================================================
+  WORKBOOK / COACHING (from your original schema, cleaned)
+============================================================================ */
+
+CREATE TABLE IF NOT EXISTS workbook.workbook_progress (
+  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id               uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  started_at            timestamptz NOT NULL DEFAULT now(),
+  last_updated          timestamptz NOT NULL DEFAULT now(),
+  completed_sections    text[] NOT NULL DEFAULT '{}',
+  completion_percentage integer NOT NULL DEFAULT 0,
+  status                text NOT NULL DEFAULT 'in_progress',
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_at            timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_workbook_progress_updated
+BEFORE UPDATE ON workbook.workbook_progress
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE TABLE IF NOT EXISTS workbook.core_values (
+  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id               uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  workbook_id           uuid REFERENCES workbook.workbook_progress(id) ON DELETE SET NULL,
+
+  how_you_were_made     text,
+  business_given        text,
+  desire_for_customers  text,
+  problems_you_solve    text,
+  principle_at_heart    text,
+  feelings_generated    text,
+  core_value_draft_1    text,
+  core_value_draft_2    text,
+  core_value_final      text,
+  ai_suggestions        text[] NOT NULL DEFAULT '{}',
+  alignment_scores      jsonb,
+  status                text NOT NULL DEFAULT 'draft',
+
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_at            timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_core_values_updated
+BEFORE UPDATE ON workbook.core_values
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE TABLE IF NOT EXISTS workbook.root_cause_charts (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id              uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  workbook_id          uuid REFERENCES workbook.workbook_progress(id) ON DELETE SET NULL,
+
+  before_triggers      text,
+  problem_description  text,
+  after_results        text,
+  five_whys            jsonb,
+  when_where_how       text,
+  who_affected         text,
+  when_not_issue       text,
+  what_driving         text,
+  conditions_worse     text,
+  how_stop_forever     text,
+  who_wins_loses       text,
+  what_stopping_us     text,
+  symptom              text,
+  root_cause           text,
+  priority_impact      text,
+  problem_statement    text,
+  affected_areas       text[] NOT NULL DEFAULT '{}',
+  ai_root_cause_suggestion text,
+  status               text NOT NULL DEFAULT 'draft',
+
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_root_cause_updated
+BEFORE UPDATE ON workbook.root_cause_charts
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE TABLE IF NOT EXISTS workbook.time_audits (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id              uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  workbook_id          uuid REFERENCES workbook.workbook_progress(id) ON DELETE SET NULL,
+
+  owner_rate           integer NOT NULL DEFAULT 150,
+  tasks                jsonb,
+  total_hours_logged   integer NOT NULL DEFAULT 0,
+  high_value_hours     integer NOT NULL DEFAULT 0,
+  medium_value_hours   integer NOT NULL DEFAULT 0,
+  low_value_hours      integer NOT NULL DEFAULT 0,
+  tasks_to_delegate    jsonb,
+  hours_to_reclaim     integer NOT NULL DEFAULT 0,
+  what_to_do_with_time text,
+  time_management_rating integer NOT NULL DEFAULT 3,
+  biggest_time_wasters text[] NOT NULL DEFAULT '{}',
+  status               text NOT NULL DEFAULT 'draft',
+
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_time_audits_updated
+BEFORE UPDATE ON workbook.time_audits
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE TABLE IF NOT EXISTS workbook.ai_coach_conversations (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  workbook_id uuid REFERENCES workbook.workbook_progress(id) ON DELETE SET NULL,
+  section     text,
+  messages    jsonb NOT NULL DEFAULT '[]',
+  key_insights text[] NOT NULL DEFAULT '{}',
+  action_items text[] NOT NULL DEFAULT '{}',
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_ai_coach_updated
+BEFORE UPDATE ON workbook.ai_coach_conversations
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE TABLE IF NOT EXISTS workbook.action_plans (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id             uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  workbook_id         uuid REFERENCES workbook.workbook_progress(id) ON DELETE SET NULL,
+
+  selected_strategy   text,
+  strategy_label      text,
+  milestones          jsonb,
+  tasks               jsonb,
+  metrics             jsonb,
+  quarter_start_date  timestamptz,
+  weekly_goals        jsonb,
+  notes               text,
+  status              text NOT NULL DEFAULT 'draft',
+
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_action_plans_updated
+BEFORE UPDATE ON workbook.action_plans
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+/* ============================================================================
+  CHAT (generic conversations/messages used across tools)
+============================================================================ */
+CREATE TABLE IF NOT EXISTS chat.conversations (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  title       text NOT NULL,
+  metadata    jsonb,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TRIGGER trg_conversations_updated
+BEFORE UPDATE ON chat.conversations
+FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+CREATE TABLE IF NOT EXISTS chat.messages (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id uuid NOT NULL REFERENCES chat.conversations(id) ON DELETE CASCADE,
+  role            text NOT NULL,     -- system|user|assistant|tool
+  content         text NOT NULL,
+  metadata        jsonb,
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON chat.messages(conversation_id);
+
+/* ============================================================================
+  DOCS (optional): document registry for RAG ingestion (Dify, etc.)
+============================================================================ */
+CREATE TABLE IF NOT EXISTS docs.documents (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  source_type  text NOT NULL,         -- 'video'|'business'|'web'|'upload'|'note'
+  source_id    uuid,                  -- e.g., video.videos.id or research.businesses.id
+  title        text,
+  content      text,                  -- store raw text; vector DB can ingest
+  tags         text[],
+  metadata     jsonb,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_user ON docs.documents(user_id);
+CREATE INDEX IF NOT EXISTS idx_documents_source ON docs.documents(source_type, source_id);
+
+/* ============================================================================
+  Helpful JSONB indexes (optional, enable if you query inside JSON frequently)
+============================================================================ */
+-- CREATE INDEX IF NOT EXISTS gin_videos_captions ON video.videos USING gin (captions);
+-- CREATE INDEX IF NOT EXISTS gin_research_runs_params ON research.research_runs USING gin (params);
+-- CREATE INDEX IF NOT EXISTS gin_publish_events_req ON video.video_publish_events USING gin (request_payload);
