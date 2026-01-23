@@ -1,0 +1,115 @@
+[
+  {
+    "name": "YouTube Publish API (Simple)",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "youtube-publish",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "webhook-1",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [200, 300],
+        "webhookId": "youtube-publish"
+      },
+      {
+        "parameters": {
+          "url": "={{ $json.body.video_url }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "file"
+              }
+            }
+          }
+        },
+        "id": "download-video",
+        "name": "Download Video",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [400, 300]
+      },
+      {
+        "parameters": {
+          "operation": "upload",
+          "title": "={{ $('Webhook').item.json.body.title }}",
+          "description": "={{ $('Webhook').item.json.body.description || '' }}",
+          "tags": "={{ $('Webhook').item.json.body.tags || [] }}",
+          "categoryId": "22",
+          "privacyStatus": "={{ $('Webhook').item.json.body.privacy_status || 'unlisted' }}",
+          "binaryData": true,
+          "binaryPropertyName": "data",
+          "options": {}
+        },
+        "id": "youtube-upload",
+        "name": "Upload to YouTube",
+        "type": "n8n-nodes-base.youTube",
+        "typeVersion": 1,
+        "position": [600, 300],
+        "credentials": {
+          "youTubeOAuth2Api": {
+            "id": "jUVaSZk836Ynuu3a",
+            "name": "YouTube account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ {\n  \"youtube_id\": $json.id,\n  \"youtube_url\": \"https://youtube.com/watch?v=\" + $json.id,\n  \"status\": \"published\"\n} }}"
+        },
+        "id": "response-success",
+        "name": "Return Success",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [800, 300]
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Download Video",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Download Video": {
+        "main": [
+          [
+            {
+              "node": "Upload to YouTube",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Upload to YouTube": {
+        "main": [
+          [
+            {
+              "node": "Return Success",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "versionId": "yt-publish-simple-v1",
+    "id": "youtube-publish-simple"
+  }
+]

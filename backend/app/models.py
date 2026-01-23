@@ -31,7 +31,7 @@ class CloudConnection(Base):
     selected_folder_name = Column(Text, nullable=True)
     is_active = Column(Text, nullable=True, default="true")
     last_synced_at = Column(DateTime, nullable=True)
-    metadata = Column(JSONB, nullable=True)
+    extra_data = Column("metadata", JSONB, nullable=True)  # renamed to avoid SQLAlchemy reserved name
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -55,7 +55,7 @@ class UserSocialAccount(Base):
     token_expires_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)
 
-    metadata = Column(JSONB, nullable=True)
+    extra_data = Column("metadata", JSONB, nullable=True)  # renamed to avoid SQLAlchemy reserved name
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

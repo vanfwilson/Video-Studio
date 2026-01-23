@@ -49,10 +49,14 @@ def serialize(v: Video) -> dict:
         "tags": v.tags,
         "hashtags": v.hashtags,
         "thumbnail_url": v.thumbnail_url,
+        "thumbnail_prompt": v.thumbnail_prompt,
+        "speaker_image_url": v.speaker_image_url,
         "privacy_status": v.privacy_status,
         "youtube_id": v.youtube_id,
         "youtube_url": v.youtube_url,
         "error_message": v.error_message,
+        "duration_ms": v.duration_ms,
+        "confidentiality_status": v.confidentiality_status,
     }
 
 @router.get("")
@@ -67,6 +71,21 @@ def get_video(video_id: int, user_id: str = Depends(require_user_id), db: Sessio
     if not v:
         raise HTTPException(404, "Video not found")
     return serialize(v)
+
+@router.get("/{video_id}/status")
+def get_video_status(video_id: int, user_id: str = Depends(require_user_id), db: Session = Depends(db_dep)):
+    """Get just the status of a video (lightweight polling endpoint)."""
+    v = db.query(Video).filter(Video.id == video_id, Video.user_id == user_id).first()
+    if not v:
+        raise HTTPException(404, "Video not found")
+    return {
+        "id": v.id,
+        "status": v.status,
+        "error_message": v.error_message,
+        "youtube_id": v.youtube_id,
+        "youtube_url": v.youtube_url,
+        "confidentiality_status": v.confidentiality_status,
+    }
 
 @router.patch("/{video_id}")
 def patch_video(video_id: int, payload: dict, user_id: str = Depends(require_user_id), db: Session = Depends(db_dep)):
@@ -116,6 +135,64 @@ async def upload(
     db.commit()
     db.refresh(v)
     return serialize(v)
+
+@router.post("/{video_id}/speaker-image")
+async def upload_speaker_image(
+    video_id: int,
+    file: UploadFile = File(...),
+    user_id: str = Depends(require_user_id),
+    db: Session = Depends(db_dep)
+):
+    """Upload a speaker/presenter image for the video."""
+    v = db.query(Video).filter(Video.id == video_id, Video.user_id == user_id).first()
+    if not v:
+        raise HTTPException(404, "Video not found")
+    if not file.filename:
+        raise HTTPException(400, "Missing filename")
+
+    os.makedirs(os.path.join(settings.UPLOAD_DIR, user_id), exist_ok=True)
+    ext = os.path.splitext(file.filename)[1] or ".jpg"
+    fname = f"speaker_{video_id}_{uuid.uuid4().hex}{ext}"
+    local_path = os.path.join(settings.UPLOAD_DIR, user_id, fname)
+
+    with open(local_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    v.speaker_image_url = public_upload_url(user_id, fname)
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+
+    return {"speaker_image_url": v.speaker_image_url}
+
+@router.post("/{video_id}/upload-thumbnail")
+async def upload_thumbnail(
+    video_id: int,
+    file: UploadFile = File(...),
+    user_id: str = Depends(require_user_id),
+    db: Session = Depends(db_dep)
+):
+    """Upload a custom thumbnail image for the video."""
+    v = db.query(Video).filter(Video.id == video_id, Video.user_id == user_id).first()
+    if not v:
+        raise HTTPException(404, "Video not found")
+    if not file.filename:
+        raise HTTPException(400, "Missing filename")
+
+    os.makedirs(os.path.join(settings.UPLOAD_DIR, user_id), exist_ok=True)
+    ext = os.path.splitext(file.filename)[1] or ".jpg"
+    fname = f"thumb_{video_id}_{uuid.uuid4().hex}{ext}"
+    local_path = os.path.join(settings.UPLOAD_DIR, user_id, fname)
+
+    with open(local_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    v.thumbnail_url = public_upload_url(user_id, fname)
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+
+    return {"thumbnail_url": v.thumbnail_url}
 
 @router.post("/ingest")
 def ingest(payload: dict, user_id: str = Depends(require_user_id), db: Session = Depends(db_dep)):

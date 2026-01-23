@@ -1,0 +1,33 @@
+# Environment and secrets
+.env
+.env.*
+.secrets-backup
+*.pem
+*.key
+
+# Build artifacts
+node_modules/
+dist/
+build/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Local analysis files
+.api-comparison.md
+.frontend-comparison.md
+.migration-plan.md
+.schema-comparison.md
+.video-insights-analysis.md

@@ -7,6 +7,9 @@ from app.config import settings
 from app.db import init_engine
 from app.api_videos import router as video_router
 from app.api_youtube import router as youtube_router
+from app.api_ai import router as ai_router
+from app.api_cloud import router as cloud_router
+from app.api_publish import router as publish_router
 
 app = FastAPI(title="Video Studio API", version="1.0.0")
 
@@ -20,6 +23,9 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 
 app.include_router(video_router)
 app.include_router(youtube_router)
+app.include_router(ai_router)
+app.include_router(cloud_router)
+app.include_router(publish_router)
 
 @app.get("/health")
 def health():

@@ -10,8 +10,10 @@ class Settings(BaseSettings):
     # Public base URL that n8n can reach (used to build public video_url for /transcribe)
     PUBLIC_BASE_URL: str = "http://localhost:8088"
 
-    # n8n endpoint
+    # n8n endpoints
     N8N_TRANSCRIBE_URL: str = "http://72.60.225.136:8001/transcribe"
+    N8N_PUBLISH_URL: Optional[str] = None  # n8n webhook for YouTube publishing
+    N8N_CLOUD_SYNC_URL: Optional[str] = None  # n8n webhook for cloud file operations
     DEFAULT_LANGUAGE_CODE: str = "en"
 
     # Upload storage
@@ -24,10 +26,10 @@ class Settings(BaseSettings):
     # Token encryption (recommended)
     APP_ENCRYPTION_KEY: Optional[str] = None  # base64 key for Fernet
 
-    # YouTube OAuth
+    # YouTube OAuth (only needed if doing local OAuth, not needed if using n8n)
     YOUTUBE_CLIENT_ID: Optional[str] = None
     YOUTUBE_CLIENT_SECRET: Optional[str] = None
-    YOUTUBE_REDIRECT_URI: Optional[str] = None  # e.g. https://video-studio.yourdomain.com/oauth/youtube/callback
+    YOUTUBE_REDIRECT_URI: Optional[str] = None
     YOUTUBE_SCOPES: str = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"
 
 settings = Settings()

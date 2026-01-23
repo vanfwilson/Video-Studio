@@ -1,15 +1,22 @@
-# build
-FROM node:20-alpine AS build
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci || npm install
-COPY . .
-ARG VITE_API_BASE_URL
-ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
-RUN npm run build
+FROM python:3.11-slim
 
-# serve
-FROM nginx:1.27-alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev gcc curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create uploads directory
+RUN mkdir -p /data/uploads
+
+EXPOSE 8080
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

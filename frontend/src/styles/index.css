@@ -2,10 +2,187 @@
 @tailwind components;
 @tailwind utilities;
 
+/* CSS Variables for shadcn/ui */
 :root {
-  color-scheme: dark;
+  --background: 210 20% 98%;
+  --foreground: 222 47% 11%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+
+  --primary: 221 83% 53%;
+  --primary-foreground: 210 40% 98%;
+
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222 47% 11%;
+
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215 16% 47%;
+
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222 47% 11%;
+
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --ring: 221 83% 53%;
+
+  --radius: 0.5rem;
+
+  --chart-1: 12 76% 61%;
+  --chart-2: 173 58% 39%;
+  --chart-3: 197 37% 24%;
+  --chart-4: 43 74% 66%;
+  --chart-5: 27 87% 67%;
+
+  --sidebar: 0 0% 98%;
+  --sidebar-foreground: 240 5% 26%;
+  --sidebar-border: 220 13% 91%;
+  --sidebar-ring: 217 91% 60%;
 }
 
-* {
-  box-sizing: border-box;
+.dark {
+  --background: 222 47% 11%;
+  --foreground: 210 20% 98%;
+
+  --card: 222 47% 11%;
+  --card-foreground: 210 20% 98%;
+
+  --popover: 222 47% 11%;
+  --popover-foreground: 210 20% 98%;
+
+  --primary: 217 91% 60%;
+  --primary-foreground: 222 47% 11%;
+
+  --secondary: 217 33% 17%;
+  --secondary-foreground: 210 20% 98%;
+
+  --muted: 217 33% 17%;
+  --muted-foreground: 215 20% 65%;
+
+  --accent: 217 33% 17%;
+  --accent-foreground: 210 20% 98%;
+
+  --destructive: 0 62% 30%;
+  --destructive-foreground: 210 20% 98%;
+
+  --border: 217 33% 17%;
+  --input: 217 33% 17%;
+  --ring: 224 76% 48%;
+}
+
+/* Custom base styles */
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom component styles */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors;
+  }
+
+  .btn-primary {
+    @apply bg-primary text-primary-foreground hover:bg-primary/90;
+  }
+
+  .btn-secondary {
+    @apply bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border;
+  }
+
+  .input {
+    @apply w-full px-3 py-2 border border-input rounded-lg text-sm;
+    @apply focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring;
+  }
+
+  .card {
+    @apply bg-card text-card-foreground rounded-xl border border-border p-4;
+  }
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Video player styles */
+video {
+  background: #0f172a;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Toast animations */
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.toast {
+  animation: slideIn 0.3s ease-out;
+}
+
+/* Loading skeleton */
+.skeleton {
+  @apply bg-muted animate-pulse rounded;
+}
+
+/* Progress bar */
+.progress-bar {
+  @apply bg-muted rounded-full overflow-hidden;
+}
+
+.progress-bar-fill {
+  @apply bg-primary h-full transition-all duration-300;
 }

@@ -1,12 +1,39 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Video Studio</title>
+    <title>Video Studio - YouTube Publishing</title>
+    <meta name="description" content="AI-powered video publishing for YouTube with automated transcription and metadata generation" />
   </head>
-  <body class="bg-slate-950 text-slate-100">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+
+    <!-- Dify Chatbot Integration -->
+    <script>
+      window.difyChatbotConfig = {
+        token: 'lPPan3LkF0B5Z5cS',
+        baseUrl: 'https://vibe.aiautomationauthority.com',
+        inputs: {},
+        systemVariables: {},
+        userVariables: {},
+      }
+    </script>
+    <script
+      src="https://vibe.aiautomationauthority.com/embed.min.js"
+      id="lPPan3LkF0B5Z5cS"
+      defer>
+    </script>
+    <style>
+      #dify-chatbot-bubble-button {
+        background-color: #1C64F2 !important;
+      }
+      #dify-chatbot-bubble-window {
+        width: 24rem !important;
+        height: 40rem !important;
+      }
+    </style>
   </body>
 </html>
