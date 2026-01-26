@@ -1,0 +1,81 @@
+{
+  "name": "Business Discovery Pipeline - Fixed Nodes",
+  "description": "Replace the Format SQL and PostgreSQL nodes with these corrected versions",
+
+  "nodes_to_replace": [
+    {
+      "node_name": "Format SQL",
+      "replace_with": {
+        "parameters": {
+          "jsCode": "// Prepare data for database insertion\nconst items = $input.all();\n\n// Get webhook data\nlet company_id = null;\nlet search_id = null;\nlet user_id = null;\n\ntry {\n  const webhookData = $(\"Webhook Trigger\").first().json.body;\n  company_id = webhookData.company_id || webhookData.companyId;\n  search_id = webhookData.search_id;\n  user_id = webhookData.user_id || 'dev_test_user';\n} catch (e) {\n  try {\n    const testData = $(\"Test Data\").first().json.body;\n    company_id = testData.company_id || testData.companyId;\n    search_id = testData.search_id || 'search-0';\n    user_id = testData.user_id || 'dev_test_user';\n  } catch (e2) {}\n}\n\n// Parse search_id to get numeric value\nconst searchIdNum = search_id ? parseInt(String(search_id).replace('search-', '')) : null;\n\n// Format results for lead_searches.results JSONB\nconst resultsForJsonb = items.map((item, idx) => {\n  const b = item.json;\n  return {\n    position: idx + 1,\n    title: b.business_name || b.name,\n    placeId: b.place_id,\n    address: b.address,\n    phone: b.phone,\n    website: b.website,\n    rating: b.rating,\n    businessType: b.type || 'lead',\n    industry: b.industry_label,\n    category: b.category\n  };\n});\n\n// Format for leads table insertion\nconst leadsForInsert = items.map((item, idx) => {\n  const b = item.json;\n  return {\n    client_business_id: company_id,\n    lead_search_id: searchIdNum,\n    user_id: user_id,\n    position: idx + 1,\n    title: b.business_name || b.name || 'Unknown',\n    place_id: b.place_id,\n    address: b.address,\n    phone: b.phone,\n    website: b.website,\n    rating: b.rating,\n    business_type: b.type === 'referral' ? 'partner' : (b.type || 'lead'),\n    industry: b.industry_label,\n    category: b.category\n  };\n});\n\nreturn [{ \n  json: { \n    results_jsonb: JSON.stringify(resultsForJsonb),\n    leads_for_insert: leadsForInsert,\n    count: items.length,\n    search_id: searchIdNum,\n    client_business_id: company_id,\n    user_id: user_id\n  } \n}];"
+        },
+        "id": "format-sql-fixed",
+        "name": "Format Data",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2
+      }
+    },
+    {
+      "node_name": "Execute a SQL query",
+      "replace_with": {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "UPDATE lead_searches SET status = 'completed', results = '{{ $json.results_jsonb }}'::jsonb, leads_found = {{ $json.count }}, total_found = {{ $json.count }}, completed_at = NOW() WHERE id = {{ $json.search_id }}",
+          "options": {}
+        },
+        "id": "update-lead-searches",
+        "name": "Update lead_searches",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.6,
+        "credentials": {
+          "postgres": {
+            "id": "f1bBtvVEuUS5eLQ7",
+            "name": "askstephen-postgres"
+          }
+        }
+      }
+    }
+  ],
+
+  "new_node_to_add": {
+    "description": "Add this node AFTER 'Update lead_searches' to insert into normalized leads table",
+    "node": {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO leads (client_business_id, lead_search_id, user_id, position, title, place_id, address, phone, website, rating, business_type, industry, category) SELECT (item->>'client_business_id')::int, (item->>'lead_search_id')::int, item->>'user_id', (item->>'position')::int, item->>'title', item->>'place_id', item->>'address', item->>'phone', item->>'website', (item->>'rating')::float, item->>'business_type', item->>'industry', item->>'category' FROM jsonb_array_elements('{{ JSON.stringify($json.leads_for_insert) }}'::jsonb) AS item ON CONFLICT (place_id) DO UPDATE SET updated_at = NOW(), rating = EXCLUDED.rating",
+        "options": {}
+      },
+      "id": "insert-leads",
+      "name": "Insert Leads",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "f1bBtvVEuUS5eLQ7",
+          "name": "askstephen-postgres"
+        }
+      }
+    }
+  },
+
+  "postgres_credentials": {
+    "note": "Make sure askstephen-postgres credential has these settings:",
+    "host": "video-studio-db",
+    "port": 5432,
+    "database": "askstephen",
+    "user": "video_studio",
+    "password": "Masaya9989"
+  },
+
+  "workflow_connections": {
+    "description": "Connect nodes in this order:",
+    "flow": [
+      "Deduplicate",
+      "Loop Over Items",
+      "Format Data",
+      "Update lead_searches",
+      "Insert Leads",
+      "Respond to Webhook"
+    ]
+  }
+}

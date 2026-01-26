@@ -1,0 +1,450 @@
+[
+  {
+    "name": "Business Discovery Pipeline",
+    "active": true,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "business-discovery",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "d9dd4a76-e566-4175-b1c6-f5510c65f7ba",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "position": [32, 560],
+        "webhookId": "727612f6-34c6-476f-bdb3-0bda898b1d83",
+        "typeVersion": 2
+      },
+      {
+        "parameters": {},
+        "id": "0a7f44c3-4f28-4ace-886d-6507eae149a0",
+        "name": "Manual Trigger",
+        "type": "n8n-nodes-base.manualTrigger",
+        "position": [32, 272],
+        "typeVersion": 1
+      },
+      {
+        "parameters": {
+          "mode": "raw",
+          "jsonOutput": "={\n  \"body\": {\n    \"company_id\": 10,\n    \"companyId\": 10,\n    \"company\": \"The Woodlands Florist\",\n    \"industry\": \"florist\",\n    \"latitude\": 30.1644595,\n    \"longitude\": -95.4550813,\n    \"search_id\": \"search-99\",\n    \"user_id\": \"dev_test_user\"\n  }\n}",
+          "options": {}
+        },
+        "id": "87ffb845-cad7-4dc3-b2ce-6d0c15127dd5",
+        "name": "Test Data",
+        "type": "n8n-nodes-base.set",
+        "position": [224, 272],
+        "typeVersion": 3.4
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "=Industry: {{ $json.body.industry }}\n\nList 5-10 Google Maps/Google My Business industry category labels for DIRECT COMPETITORS - businesses in the same or very similar industry that compete for the same customers.\n\nReturn ONLY a JSON array of 1-3 word industry labels: [\"label1\", \"label2\", ...]"
+        },
+        "id": "68b5f21d-580a-469a-a859-f7c7ea13b910",
+        "name": "LLM Competitors",
+        "type": "@n8n/n8n-nodes-langchain.chainLlm",
+        "position": [528, 320],
+        "typeVersion": 1.6
+      },
+      {
+        "parameters": {
+          "model": "openai/gpt-4o-mini",
+          "options": {}
+        },
+        "id": "81c9acc4-346d-4edb-8482-10f0741d544b",
+        "name": "OpenRouter Competitors",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+        "position": [608, 528],
+        "typeVersion": 1,
+        "credentials": {
+          "openRouterApi": {
+            "id": "UxmupQ8GWZzDlZoh",
+            "name": "OpenRouter askstephen"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "=Industry: {{ $json.body.industry }}\n\nList 5-10 Google Maps/Google My Business industry category labels for REFERRAL PARTNERS - businesses in OTHER industries that would logically SEND customers to a {{ $json.body.industry }}.\n\nReturn ONLY a JSON array of 1-3 word industry labels: [\"label1\", \"label2\", ...]"
+        },
+        "id": "a91711d5-b882-4793-8501-bf258c2fa282",
+        "name": "LLM Referrals",
+        "type": "@n8n/n8n-nodes-langchain.chainLlm",
+        "position": [528, 624],
+        "typeVersion": 1.6
+      },
+      {
+        "parameters": {
+          "model": "openai/gpt-4o-mini",
+          "options": {}
+        },
+        "id": "9722256f-61d1-4a62-823a-d5caca55af06",
+        "name": "OpenRouter Referrals",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+        "position": [608, 832],
+        "typeVersion": 1,
+        "credentials": {
+          "openRouterApi": {
+            "id": "UxmupQ8GWZzDlZoh",
+            "name": "OpenRouter askstephen"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "=Industry: {{ $json.body.industry }}\n\nList 5-10 Google Maps/Google My Business industry category labels for IDEAL CUSTOMERS (LEADS) - businesses in OTHER industries that would BUY FROM or hire a {{ $json.body.industry }}.\n\nReturn ONLY a JSON array of 1-3 word industry labels: [\"label1\", \"label2\", ...]"
+        },
+        "id": "d862210a-aa9d-413c-ad60-b0f8a7669e7e",
+        "name": "LLM Leads",
+        "type": "@n8n/n8n-nodes-langchain.chainLlm",
+        "position": [528, 928],
+        "typeVersion": 1.6
+      },
+      {
+        "parameters": {
+          "model": "openai/gpt-4o-mini",
+          "options": {}
+        },
+        "id": "16541645-df84-48c0-beea-5802ee5c4a8b",
+        "name": "OpenRouter Leads",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+        "position": [608, 1120],
+        "typeVersion": 1,
+        "credentials": {
+          "openRouterApi": {
+            "id": "UxmupQ8GWZzDlZoh",
+            "name": "OpenRouter askstephen"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "let webhook;\ntry {\n  webhook = $('Webhook Trigger').first().json.body;\n} catch (e) {\n  webhook = $('Test Data').first().json.body;\n}\n\nconst response = $input.first().json;\nconst text = response.response?.text || response.text || '';\nconst clean = text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\nconst labels = JSON.parse(clean);\n\nreturn labels.map(label => ({\n  json: {\n    industry_label: label,\n    type: 'competitor',\n    company_id: webhook.company_id || webhook.companyId,\n    user_id: webhook.user_id || 'dev_test_user',\n    search_id: webhook.search_id,\n    latitude: webhook.latitude,\n    longitude: webhook.longitude\n  }\n}));"
+        },
+        "id": "b1a45d2e-0694-4278-a459-46aa991d9947",
+        "name": "Parse Competitors",
+        "type": "n8n-nodes-base.code",
+        "position": [784, 320],
+        "typeVersion": 2
+      },
+      {
+        "parameters": {
+          "jsCode": "let webhook;\ntry {\n  webhook = $('Webhook Trigger').first().json.body;\n} catch (e) {\n  webhook = $('Test Data').first().json.body;\n}\n\nconst response = $input.first().json;\nconst text = response.response?.text || response.text || '';\nconst clean = text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\nconst labels = JSON.parse(clean);\n\nreturn labels.map(label => ({\n  json: {\n    industry_label: label,\n    type: 'partner',\n    company_id: webhook.company_id || webhook.companyId,\n    user_id: webhook.user_id || 'dev_test_user',\n    search_id: webhook.search_id,\n    latitude: webhook.latitude,\n    longitude: webhook.longitude\n  }\n}));"
+        },
+        "id": "bb6bb63b-d7f0-44bf-b5cb-51a4733382e2",
+        "name": "Parse Referrals",
+        "type": "n8n-nodes-base.code",
+        "position": [784, 624],
+        "typeVersion": 2
+      },
+      {
+        "parameters": {
+          "jsCode": "let webhook;\ntry {\n  webhook = $('Webhook Trigger').first().json.body;\n} catch (e) {\n  webhook = $('Test Data').first().json.body;\n}\n\nconst response = $input.first().json;\nconst text = response.response?.text || response.text || '';\nconst clean = text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\nconst labels = JSON.parse(clean);\n\nreturn labels.map(label => ({\n  json: {\n    industry_label: label,\n    type: 'ideal_customer',\n    company_id: webhook.company_id || webhook.companyId,\n    user_id: webhook.user_id || 'dev_test_user',\n    search_id: webhook.search_id,\n    latitude: webhook.latitude,\n    longitude: webhook.longitude\n  }\n}));"
+        },
+        "id": "e3494154-e783-40d7-b607-6621be556faf",
+        "name": "Parse Leads",
+        "type": "n8n-nodes-base.code",
+        "position": [784, 928],
+        "typeVersion": 2
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://places.googleapis.com/v1/places:searchText",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "Content-Type", "value": "application/json" },
+              { "name": "X-Goog-FieldMask", "value": "places.id,places.displayName,places.formattedAddress,places.rating,places.websiteUri,places.internationalPhoneNumber,places.userRatingCount" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"textQuery\": \"{{ $json.industry_label }}\",\n  \"locationBias\": {\n    \"circle\": {\n      \"center\": {\n        \"latitude\": {{ $json.latitude }},\n        \"longitude\": {{ $json.longitude }}\n      },\n      \"radius\": 32186.0\n    }\n  },\n  \"maxResultCount\": 20\n}",
+          "options": {}
+        },
+        "id": "37671c7c-0652-4fb0-82ec-48d70850afe9",
+        "name": "Places Competitors",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [1024, 320],
+        "typeVersion": 4.2,
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "GoogleAPIKey001",
+            "name": "Google-API-Key"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://places.googleapis.com/v1/places:searchText",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "Content-Type", "value": "application/json" },
+              { "name": "X-Goog-FieldMask", "value": "places.id,places.displayName,places.formattedAddress,places.rating,places.websiteUri,places.internationalPhoneNumber,places.userRatingCount" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"textQuery\": \"{{ $json.industry_label }}\",\n  \"locationBias\": {\n    \"circle\": {\n      \"center\": {\n        \"latitude\": {{ $json.latitude }},\n        \"longitude\": {{ $json.longitude }}\n      },\n      \"radius\": 32186.0\n    }\n  },\n  \"maxResultCount\": 20\n}",
+          "options": {}
+        },
+        "id": "c8c67ce0-e173-4dd6-bf66-7dc3228ff42d",
+        "name": "Places Referrals",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [1024, 624],
+        "typeVersion": 4.2,
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "GoogleAPIKey001",
+            "name": "Google-API-Key"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://places.googleapis.com/v1/places:searchText",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "Content-Type", "value": "application/json" },
+              { "name": "X-Goog-FieldMask", "value": "places.id,places.displayName,places.formattedAddress,places.rating,places.websiteUri,places.internationalPhoneNumber,places.userRatingCount" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"textQuery\": \"{{ $json.industry_label }}\",\n  \"locationBias\": {\n    \"circle\": {\n      \"center\": {\n        \"latitude\": {{ $json.latitude }},\n        \"longitude\": {{ $json.longitude }}\n      },\n      \"radius\": 32186.0\n    }\n  },\n  \"maxResultCount\": 20\n}",
+          "options": {}
+        },
+        "id": "738986ca-bcad-4a18-856f-34a520b4cc64",
+        "name": "Places Leads",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [1024, 928],
+        "typeVersion": 4.2,
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "GoogleAPIKey001",
+            "name": "Google-API-Key"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "const items = $input.all();\nconst parseItems = $('Parse Competitors').all();\nconst results = [];\n\nitems.forEach((item, idx) => {\n  const meta = parseItems[idx]?.json || {};\n  const places = item.json.places || [];\n  places.forEach(p => {\n    if (p?.id) {\n      results.push({\n        json: {\n          place_id: p.id,\n          business_name: p.displayName?.text || '',\n          address: p.formattedAddress || '',\n          phone: p.internationalPhoneNumber || null,\n          website: p.websiteUri || null,\n          rating: p.rating || null,\n          reviews: p.userRatingCount || null,\n          industry_label: meta.industry_label,\n          type: 'competitor',\n          company_id: meta.company_id,\n          user_id: meta.user_id,\n          search_id: meta.search_id\n        }\n      });\n    }\n  });\n});\nreturn results;"
+        },
+        "id": "6e53b5f9-6e27-423b-b8f3-dc6b00b7ad9d",
+        "name": "Extract Competitors",
+        "type": "n8n-nodes-base.code",
+        "position": [1232, 320],
+        "typeVersion": 2
+      },
+      {
+        "parameters": {
+          "jsCode": "const items = $input.all();\nconst parseItems = $('Parse Referrals').all();\nconst results = [];\n\nitems.forEach((item, idx) => {\n  const meta = parseItems[idx]?.json || {};\n  const places = item.json.places || [];\n  places.forEach(p => {\n    if (p?.id) {\n      results.push({\n        json: {\n          place_id: p.id,\n          business_name: p.displayName?.text || '',\n          address: p.formattedAddress || '',\n          phone: p.internationalPhoneNumber || null,\n          website: p.websiteUri || null,\n          rating: p.rating || null,\n          reviews: p.userRatingCount || null,\n          industry_label: meta.industry_label,\n          type: 'partner',\n          company_id: meta.company_id,\n          user_id: meta.user_id,\n          search_id: meta.search_id\n        }\n      });\n    }\n  });\n});\nreturn results;"
+        },
+        "id": "c8e7bce2-916b-4cfe-9e60-d1ced2d49a82",
+        "name": "Extract Referrals",
+        "type": "n8n-nodes-base.code",
+        "position": [1232, 624],
+        "typeVersion": 2
+      },
+      {
+        "parameters": {
+          "jsCode": "const items = $input.all();\nconst parseItems = $('Parse Leads').all();\nconst results = [];\n\nitems.forEach((item, idx) => {\n  const meta = parseItems[idx]?.json || {};\n  const places = item.json.places || [];\n  places.forEach(p => {\n    if (p?.id) {\n      results.push({\n        json: {\n          place_id: p.id,\n          business_name: p.displayName?.text || '',\n          address: p.formattedAddress || '',\n          phone: p.internationalPhoneNumber || null,\n          website: p.websiteUri || null,\n          rating: p.rating || null,\n          reviews: p.userRatingCount || null,\n          industry_label: meta.industry_label,\n          type: 'ideal_customer',\n          company_id: meta.company_id,\n          user_id: meta.user_id,\n          search_id: meta.search_id\n        }\n      });\n    }\n  });\n});\nreturn results;"
+        },
+        "id": "becd5244-8df4-4019-9353-17d3ba5e88c0",
+        "name": "Extract Leads",
+        "type": "n8n-nodes-base.code",
+        "position": [1232, 928],
+        "typeVersion": 2
+      },
+      {
+        "parameters": {
+          "numberInputs": 3
+        },
+        "id": "65c51af1-9ad7-4dd0-beb7-e1aad961a0f8",
+        "name": "Merge",
+        "type": "n8n-nodes-base.merge",
+        "position": [1440, 608],
+        "typeVersion": 3.2
+      },
+      {
+        "parameters": {
+          "jsCode": "// Deduplicate by place_id\nconst items = $input.all();\nconst seen = new Set();\nconst unique = [];\n\nitems.forEach(item => {\n  const b = item.json;\n  if (b.place_id && !seen.has(b.place_id)) {\n    seen.add(b.place_id);\n    unique.push(b);\n  }\n});\n\nreturn unique.map(b => ({ json: b }));"
+        },
+        "id": "46ce104c-8d95-4522-a851-ba71407c740f",
+        "name": "Deduplicate",
+        "type": "n8n-nodes-base.code",
+        "position": [1632, 624],
+        "typeVersion": 2
+      },
+      {
+        "parameters": {
+          "jsCode": "// Prepare data for database\nconst items = $input.all();\n\nif (items.length === 0) {\n  return [{ json: { count: 0, results_jsonb: '[]', search_id: null, client_business_id: null, user_id: null, businesses_for_insert: [] } }];\n}\n\n// Get metadata from first item\nconst first = items[0].json;\nconst company_id = first.company_id;\nconst user_id = first.user_id || 'dev_test_user';\nconst search_id = first.search_id;\nconst searchIdNum = search_id ? parseInt(String(search_id).replace('search-', '')) : null;\n\n// Format results for lead_searches.results JSONB\nconst resultsForJsonb = items.map((item, idx) => {\n  const b = item.json;\n  return {\n    position: idx + 1,\n    name: b.business_name,\n    placeId: b.place_id,\n    address: b.address,\n    phone: b.phone,\n    website: b.website,\n    rating: b.rating,\n    reviewCount: b.reviews,\n    businessType: b.type === 'ideal_customer' ? 'lead' : b.type,\n    industry: b.industry_label\n  };\n});\n\n// Format for local_businesses table insertion  \nconst businessesForInsert = items.map((item, idx) => {\n  const b = item.json;\n  // Map 'ideal_customer' to 'lead' to match check constraint\n  const businessType = b.type === 'ideal_customer' ? 'lead' : b.type;\n  return {\n    client_business_id: company_id,\n    lead_search_id: searchIdNum,\n    user_id: user_id,\n    position: idx + 1,\n    name: b.business_name || 'Unknown',\n    place_id: b.place_id,\n    address: b.address,\n    phone: b.phone,\n    website: b.website,\n    rating: b.rating,\n    review_count: b.reviews,\n    business_type: businessType,\n    industry_label: b.industry_label\n  };\n});\n\nreturn [{ \n  json: { \n    results_jsonb: JSON.stringify(resultsForJsonb),\n    businesses_for_insert: businessesForInsert,\n    count: items.length,\n    search_id: searchIdNum,\n    client_business_id: company_id,\n    user_id: user_id\n  } \n}];"
+        },
+        "id": "efbac6c5-e9d3-42dc-94f3-fad492a83fed",
+        "name": "Format Data",
+        "type": "n8n-nodes-base.code",
+        "position": [1840, 624],
+        "typeVersion": 2
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "UPDATE lead_searches SET status = 'completed', results = '{{ $json.results_jsonb }}'::jsonb, leads_found = {{ $json.count }}, total_found = {{ $json.count }}, completed_at = NOW() WHERE id = {{ $json.search_id }}; SELECT {{ $json.count }} as updated;",
+          "options": {}
+        },
+        "id": "update-lead-searches",
+        "name": "Update lead_searches",
+        "type": "n8n-nodes-base.postgres",
+        "position": [2064, 624],
+        "typeVersion": 2.6,
+        "credentials": {
+          "postgres": {
+            "id": "f1bBtvVEuUS5eLQ7",
+            "name": "askstephen-postgres"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "INSERT INTO local_businesses (client_business_id, lead_search_id, user_id, position, name, place_id, address, phone, website, rating, review_count, business_type, industry_label)\nSELECT \n  (item->>'client_business_id')::int,\n  (item->>'lead_search_id')::int,\n  item->>'user_id',\n  (item->>'position')::int,\n  COALESCE(item->>'name', 'Unknown'),\n  item->>'place_id',\n  item->>'address',\n  item->>'phone',\n  item->>'website',\n  (item->>'rating')::float,\n  (item->>'review_count')::int,\n  item->>'business_type',\n  item->>'industry_label'\nFROM jsonb_array_elements($1::jsonb) AS item\nON CONFLICT (client_business_id, place_id) DO UPDATE SET \n  updated_at = NOW(),\n  rating = EXCLUDED.rating,\n  review_count = EXCLUDED.review_count,\n  lead_search_id = EXCLUDED.lead_search_id,\n  position = EXCLUDED.position;",
+          "options": {
+            "queryParams": "={{ JSON.stringify($json.businesses_for_insert) }}"
+          }
+        },
+        "id": "insert-leads",
+        "name": "Insert Local Businesses",
+        "type": "n8n-nodes-base.postgres",
+        "position": [2288, 624],
+        "typeVersion": 2.6,
+        "credentials": {
+          "postgres": {
+            "id": "f1bBtvVEuUS5eLQ7",
+            "name": "askstephen-postgres"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ success: true, count: $('Format Data').first().json.count, search_id: $('Format Data').first().json.search_id }) }}",
+          "options": {
+            "responseCode": 200
+          }
+        },
+        "id": "9b8bb73e-7b28-48e3-8570-5620dac7059f",
+        "name": "Respond to Webhook",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "position": [2512, 624],
+        "typeVersion": 1.4
+      }
+    ],
+    "connections": {
+      "Manual Trigger": {
+        "main": [[{ "node": "Test Data", "type": "main", "index": 0 }]]
+      },
+      "Test Data": {
+        "main": [
+          [
+            { "node": "LLM Competitors", "type": "main", "index": 0 },
+            { "node": "LLM Referrals", "type": "main", "index": 0 },
+            { "node": "LLM Leads", "type": "main", "index": 0 }
+          ]
+        ]
+      },
+      "Webhook Trigger": {
+        "main": [
+          [
+            { "node": "LLM Competitors", "type": "main", "index": 0 },
+            { "node": "LLM Referrals", "type": "main", "index": 0 },
+            { "node": "LLM Leads", "type": "main", "index": 0 }
+          ]
+        ]
+      },
+      "LLM Competitors": {
+        "main": [[{ "node": "Parse Competitors", "type": "main", "index": 0 }]]
+      },
+      "LLM Referrals": {
+        "main": [[{ "node": "Parse Referrals", "type": "main", "index": 0 }]]
+      },
+      "LLM Leads": {
+        "main": [[{ "node": "Parse Leads", "type": "main", "index": 0 }]]
+      },
+      "OpenRouter Competitors": {
+        "ai_languageModel": [[{ "node": "LLM Competitors", "type": "ai_languageModel", "index": 0 }]]
+      },
+      "OpenRouter Referrals": {
+        "ai_languageModel": [[{ "node": "LLM Referrals", "type": "ai_languageModel", "index": 0 }]]
+      },
+      "OpenRouter Leads": {
+        "ai_languageModel": [[{ "node": "LLM Leads", "type": "ai_languageModel", "index": 0 }]]
+      },
+      "Parse Competitors": {
+        "main": [[{ "node": "Places Competitors", "type": "main", "index": 0 }]]
+      },
+      "Parse Referrals": {
+        "main": [[{ "node": "Places Referrals", "type": "main", "index": 0 }]]
+      },
+      "Parse Leads": {
+        "main": [[{ "node": "Places Leads", "type": "main", "index": 0 }]]
+      },
+      "Places Competitors": {
+        "main": [[{ "node": "Extract Competitors", "type": "main", "index": 0 }]]
+      },
+      "Places Referrals": {
+        "main": [[{ "node": "Extract Referrals", "type": "main", "index": 0 }]]
+      },
+      "Places Leads": {
+        "main": [[{ "node": "Extract Leads", "type": "main", "index": 0 }]]
+      },
+      "Extract Competitors": {
+        "main": [[{ "node": "Merge", "type": "main", "index": 0 }]]
+      },
+      "Extract Referrals": {
+        "main": [[{ "node": "Merge", "type": "main", "index": 1 }]]
+      },
+      "Extract Leads": {
+        "main": [[{ "node": "Merge", "type": "main", "index": 2 }]]
+      },
+      "Merge": {
+        "main": [[{ "node": "Deduplicate", "type": "main", "index": 0 }]]
+      },
+      "Deduplicate": {
+        "main": [[{ "node": "Format Data", "type": "main", "index": 0 }]]
+      },
+      "Format Data": {
+        "main": [[{ "node": "Update lead_searches", "type": "main", "index": 0 }]]
+      },
+      "Update lead_searches": {
+        "main": [[{ "node": "Insert Local Businesses", "type": "main", "index": 0 }]]
+      },
+      "Insert Local Businesses": {
+        "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+      }
+    },
+    "settings": {},
+    "staticData": null,
+    "meta": {
+      "instanceId": "42f06bdbe33c6e48441258a73a5cbec4a66a97aff3a765b2ca73c67ed394d25f"
+    },
+    "pinData": {},
+    "versionId": "fixed-v1",
+    "triggerCount": 1,
+    "tags": []
+  }
+]
