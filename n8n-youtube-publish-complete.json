@@ -1,0 +1,262 @@
+[
+  {
+    "name": "YouTube Publish Complete (Video + Thumbnail + Captions)",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "youtube-publish",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "node-webhook",
+        "name": "1. Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [200, 300],
+        "webhookId": "youtube-publish"
+      },
+      {
+        "parameters": {
+          "url": "={{ $json.body.video_url }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "file"
+              }
+            }
+          }
+        },
+        "id": "node-download-video",
+        "name": "2. Download Video",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [400, 300]
+      },
+      {
+        "parameters": {
+          "operation": "upload",
+          "title": "={{ $('1. Webhook').item.json.body.title }}",
+          "description": "={{ $('1. Webhook').item.json.body.description || '' }}",
+          "tags": "={{ $('1. Webhook').item.json.body.tags || [] }}",
+          "categoryId": "22",
+          "privacyStatus": "={{ $('1. Webhook').item.json.body.privacy_status || 'unlisted' }}",
+          "binaryData": true,
+          "binaryPropertyName": "data",
+          "options": {}
+        },
+        "id": "node-youtube-upload",
+        "name": "3. Upload Video to YouTube",
+        "type": "n8n-nodes-base.youTube",
+        "typeVersion": 1,
+        "position": [600, 300],
+        "credentials": {
+          "youTubeOAuth2Api": {
+            "id": "jUVaSZk836Ynuu3a",
+            "name": "YouTube account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "// Store the video ID for later use\nconst videoId = $input.item.json.id;\nconst webhookData = $('1. Webhook').item.json.body;\n\nreturn {\n  json: {\n    videoId: videoId,\n    thumbnail_url: webhookData.thumbnail_url || null,\n    captions: webhookData.captions || []\n  }\n};"
+        },
+        "id": "node-prepare",
+        "name": "4. Prepare Data",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [800, 300]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": { "combinator": "and" },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.thumbnail_url }}",
+                "rightValue": "",
+                "operator": { "type": "string", "operation": "notEmpty" }
+              }
+            ]
+          }
+        },
+        "id": "node-check-thumbnail",
+        "name": "5. Has Thumbnail?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [1000, 200]
+      },
+      {
+        "parameters": {
+          "url": "={{ $json.thumbnail_url }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "file"
+              }
+            }
+          }
+        },
+        "id": "node-download-thumb",
+        "name": "6a. Download Thumbnail",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1200, 100]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "=https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={{ $('4. Prepare Data').item.json.videoId }}",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "youTubeOAuth2Api",
+          "sendBody": true,
+          "contentType": "binaryData",
+          "inputDataFieldName": "data",
+          "options": {}
+        },
+        "id": "node-upload-thumb",
+        "name": "7a. POST Thumbnail to YouTube",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1400, 100],
+        "credentials": {
+          "youTubeOAuth2Api": {
+            "id": "jUVaSZk836Ynuu3a",
+            "name": "YouTube account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": { "combinator": "and" },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.captions.length }}",
+                "rightValue": 0,
+                "operator": { "type": "number", "operation": "gt" }
+              }
+            ]
+          }
+        },
+        "id": "node-check-captions",
+        "name": "5b. Has Captions?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [1000, 400]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Split captions into individual items\nconst videoId = $('4. Prepare Data').item.json.videoId;\nconst captions = $('4. Prepare Data').item.json.captions || [];\n\nreturn captions.map(cap => ({\n  json: {\n    videoId: videoId,\n    language: cap.language,\n    name: cap.language + ' captions',\n    content: cap.content\n  }\n}));"
+        },
+        "id": "node-split-captions",
+        "name": "6b. Split Captions",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [1200, 400]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "=https://www.googleapis.com/upload/youtube/v3/captions?uploadType=multipart&part=snippet",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "youTubeOAuth2Api",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "Content-Type", "value": "multipart/related; boundary=caption_boundary" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "string",
+          "body": "=--caption_boundary\nContent-Type: application/json; charset=UTF-8\n\n{\"snippet\":{\"videoId\":\"{{ $json.videoId }}\",\"language\":\"{{ $json.language }}\",\"name\":\"{{ $json.name }}\"}}\n--caption_boundary\nContent-Type: text/plain\n\n{{ $json.content }}\n--caption_boundary--",
+          "options": {}
+        },
+        "id": "node-upload-caption",
+        "name": "7b. POST Caption to YouTube",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1400, 400],
+        "credentials": {
+          "youTubeOAuth2Api": {
+            "id": "jUVaSZk836Ynuu3a",
+            "name": "YouTube account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "mode": "combine",
+          "combineBy": "combineAll",
+          "options": {}
+        },
+        "id": "node-merge",
+        "name": "8. Merge Results",
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3,
+        "position": [1600, 300]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ {\n  \"youtube_id\": $('4. Prepare Data').item.json.videoId,\n  \"youtube_url\": \"https://youtube.com/watch?v=\" + $('4. Prepare Data').item.json.videoId,\n  \"status\": \"published\"\n} }}"
+        },
+        "id": "node-response",
+        "name": "9. Return Success",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [1800, 300]
+      }
+    ],
+    "connections": {
+      "1. Webhook": {
+        "main": [[{ "node": "2. Download Video", "type": "main", "index": 0 }]]
+      },
+      "2. Download Video": {
+        "main": [[{ "node": "3. Upload Video to YouTube", "type": "main", "index": 0 }]]
+      },
+      "3. Upload Video to YouTube": {
+        "main": [[{ "node": "4. Prepare Data", "type": "main", "index": 0 }]]
+      },
+      "4. Prepare Data": {
+        "main": [[
+          { "node": "5. Has Thumbnail?", "type": "main", "index": 0 },
+          { "node": "5b. Has Captions?", "type": "main", "index": 0 }
+        ]]
+      },
+      "5. Has Thumbnail?": {
+        "main": [
+          [{ "node": "6a. Download Thumbnail", "type": "main", "index": 0 }],
+          [{ "node": "8. Merge Results", "type": "main", "index": 0 }]
+        ]
+      },
+      "6a. Download Thumbnail": {
+        "main": [[{ "node": "7a. POST Thumbnail to YouTube", "type": "main", "index": 0 }]]
+      },
+      "7a. POST Thumbnail to YouTube": {
+        "main": [[{ "node": "8. Merge Results", "type": "main", "index": 0 }]]
+      },
+      "5b. Has Captions?": {
+        "main": [
+          [{ "node": "6b. Split Captions", "type": "main", "index": 0 }],
+          [{ "node": "8. Merge Results", "type": "main", "index": 1 }]
+        ]
+      },
+      "6b. Split Captions": {
+        "main": [[{ "node": "7b. POST Caption to YouTube", "type": "main", "index": 0 }]]
+      },
+      "7b. POST Caption to YouTube": {
+        "main": [[{ "node": "8. Merge Results", "type": "main", "index": 1 }]]
+      },
+      "8. Merge Results": {
+        "main": [[{ "node": "9. Return Success", "type": "main", "index": 0 }]]
+      }
+    },
+    "settings": { "executionOrder": "v1" },
+    "versionId": "yt-publish-complete-v1",
+    "id": "youtube-publish-complete"
+  }
+]
